@@ -8,32 +8,23 @@ public class Win32 {
     public static extern IntPtr GetConsoleWindow();
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-"@
-
-$SW_HIDE = 0
-$hWnd = [Win32]::GetConsoleWindow()
-if ($hWnd -ne [IntPtr]::Zero) {
-    [Win32]::ShowWindow($hWnd, $SW_HIDE)
-}
-
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32 {
     [DllImport("user32.dll")]
     public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")]
     public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
 }
 "@
 
-$SW_MINIMIZE = 6
 $SW_HIDE = 0
+$SW_MINIMIZE = 6
 $WM_COMMAND = 0x111
 $MIN_ALL = 419
+
+# コンソール隠す
+$hWnd = [Win32]::GetConsoleWindow()
+if ($hWnd -ne [IntPtr]::Zero) {
+    [Win32]::ShowWindow($hWnd, $SW_HIDE)
+}
 
 # .NET GUI準備
 Add-Type -AssemblyName System.Windows.Forms
@@ -41,193 +32,6 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 # Edgeパス
-$edgePaths = @(
-    "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe",
-    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
-)
-
-# --- メインフォーム ---
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "　【　配　信　＆　ゲ　ー　ミ　ン　グ　ラ　ン　チ　ャ　ー　】"
-$form.FormBorderStyle = 'FixedDialog'
-$form.MaximizeBox = $false
-$form.MinimizeBox = $false
-$form.StartPosition = 'CenterScreen'
-$form.Size = New-Object Drawing.Size(540, 360)
-$form.TopMost = $true
-$form.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 255)
-
-# --- Write-Log 関数 ---
-function Write-Log($msg) {
-    try {
-        $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')] $msg`r`n")
-    } catch { Write-Host "ログ出力エラー: $_" }
-}
-
-# --- 配信開始ボタン押下時：OBS最小化 ---
-$btnStart.Add_Click({
-    try {
-        $obsHwnd = [Win32]::FindWindow("Qt5QWindowIcon", $null)
-        if ($obsHwnd -ne [IntPtr]::Zero) {
-            [Win32]::ShowWindow($obsHwnd, $SW_MINIMIZE)
-        }
-        Write-Log "配信開始ボタン押下→OBS最小化！"
-        $statusLabel.Text = "【配信中！】"
-        $statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(200, 40, 40)
-        Start-Game
-    } catch { Write-Log "OBS最小化エラー: $_" }
-})
-
-# --- OBS「配信開始」ボタン押下監視で最小化 ---
-Start-Job -ScriptBlock {
-    $SW_MINIMIZE = 6
-    Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32 {
-    [DllImport("user32.dll")]
-    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-"@ -ErrorAction SilentlyContinue
-    $obsProcessName = "obs64"
-    $alreadyMinimized = $false
-    while ($true) {
-        $obsProc = Get-Process -Name $obsProcessName -ErrorAction SilentlyContinue
-        if ($obsProc) {
-            foreach ($proc in $obsProc) {
-                $hwnd = [Win32]::FindWindow($null, $proc.MainWindowTitle)
-                if ($hwnd -ne 0 -and $proc.MainWindowTitle -match "配信中") {
-                    if (-not $alreadyMinimized) {
-                        [Win32]::ShowWindow($hwnd, $SW_MINIMIZE)
-                        $alreadyMinimized = $true
-                    }
-                } else {
-                    $alreadyMinimized = $false
-                }
-            }
-        }
-        Start-Sleep -Seconds 1
-    }
-} | Out-Null
-
-# --- デスクトップ全部最小化 ---
-$hShellTrayWnd = [Win32]::FindWindow("Shell_TrayWnd", $null)
-if ($hShellTrayWnd -ne [IntPtr]::Zero) {
-    [Win32.NativeMethods]::SendMessage($hShellTrayWnd, $WM_COMMAND, $MIN_ALL, 0)
-    Write-Host "デスクトップ最小化コマンド送信完了！"
-}
-
-# --- フォームクローズ時イベント名修正！ ---
-$form.Add_FormClosing({
-    $_.Cancel = $true
-    Show-AfterExitMenu
-})
-
-# デバッグ用に、表示中のウィンドウ全部ログ出す関数を1個つけとくと鬼便利！
-
-function Show-AllWindows {
-    $signature = @"
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public class Win32Enum {
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-}
-"@
-    Add-Type $signature -ErrorAction SilentlyContinue
-
-    [Win32Enum+EnumWindowsProc]$callback = {
-        param($hWnd, $lParam)
-        $builder = New-Object System.Text.StringBuilder 1024
-        [void][Win32Enum]::GetWindowText($hWnd, $builder, 1024)
-        if ($builder.Length -gt 0) {
-            Write-Host "Window: $($builder.ToString())"
-        }
-        return $true
-    }
-
-    [Win32Enum]::EnumWindows($callback, [IntPtr]::Zero)
-}
-
-# --- .NET GUI準備 ---
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
-
-function Show-AfterExitMenu {
-    # --- フォーム本体 ---
-    $menuForm = New-Object System.Windows.Forms.Form
-    $menuForm.Text = "　Windows 終了しますか？　"
-    $menuForm.FormBorderStyle = 'FixedDialog'
-    $menuForm.MaximizeBox = $false
-    $menuForm.MinimizeBox = $false
-    $menuForm.StartPosition = 'CenterScreen'
-    $menuForm.Size = New-Object Drawing.Size(320,200)
-    $menuForm.TopMost = $true
-    $menuForm.BackColor = [System.Drawing.Color]::FromArgb(240,250,255)
-
-    # 再起動ボタン
-    $btnRestart = New-Object System.Windows.Forms.Button
-    $btnRestart.Text = "再起動"
-    $btnRestart.Location = New-Object Drawing.Point(30,30)
-    $btnRestart.Size = New-Object Drawing.Size(110,36)
-    $btnRestart.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
-    $btnRestart.Add_Click({ 
-        [System.Windows.Forms.MessageBox]::Show("龍神様が再起動ぶっ飛ばすばい！") 
-        Restart-Computer
-    })
-    $menuForm.Controls.Add($btnRestart)
-
-    # サスペンドボタン
-    $btnSuspend = New-Object System.Windows.Forms.Button
-    $btnSuspend.Text = "サスペンド"
-    $btnSuspend.Location = New-Object Drawing.Point(160,30)
-    $btnSuspend.Size = New-Object Drawing.Size(110,36)
-    $btnSuspend.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
-    $btnSuspend.Add_Click({
-        [System.Windows.Forms.MessageBox]::Show("龍神様で眠らせるばい…zzz")
-        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PowerState { [DllImport("Powrprof.dll", SetLastError=true)] public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent); }' -ErrorAction SilentlyContinue
-        [void][PowerState]::SetSuspendState($false, $true, $true)
-    })
-    $menuForm.Controls.Add($btnSuspend)
-
-    # シャットダウンボタン
-    $btnShutdown = New-Object System.Windows.Forms.Button
-    $btnShutdown.Text = "シャットダウン"
-    $btnShutdown.Location = New-Object Drawing.Point(30,90)
-    $btnShutdown.Size = New-Object Drawing.Size(110,36)
-    $btnShutdown.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
-    $btnShutdown.Add_Click({
-        [System.Windows.Forms.MessageBox]::Show("龍神様がシャットダウンごり押しするばい！")
-        Stop-Computer
-    })
-    $menuForm.Controls.Add($btnShutdown)
-
-    # "終わらない"ボタン（Edgeでx.com開いてF11全画面）
-    $btnEdge = New-Object System.Windows.Forms.Button
-    $btnEdge.Text = "終わらない"
-    $btnEdge.Location = New-Object Drawing.Point(160,90)
-    $btnEdge.Size = New-Object Drawing.Size(110,36)
-    $btnEdge.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
-
-   $btnEdge.Add_Click({
-    Start-Process "msedge.exe" "https://x.com"
-    Start-Sleep -Seconds 3
-    $wshell = New-Object -ComObject wscript.shell
-    $wshell.SendKeys('{F11}')
-})
-
-    $menuForm.Controls.Add($btnEdge)
-
-    # フォーム表示
-    $menuForm.ShowDialog()
-}
-
-# Edgeのパス（必要ならここに追記できる）
 $edgePaths = @(
     "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe",
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
@@ -333,7 +137,7 @@ $logBox.BackColor = [System.Drawing.Color]::White
 $logBox.Font = New-Object Drawing.Font("Consolas", 9)
 $form.Controls.Add($logBox)
 
-# --- ボタン定義（1回だけ！） ---
+# --- ボタン定義 ---
 $btnStart = New-Object System.Windows.Forms.Button
 $btnStart.Text = "配信開始＋ゲーム起動"
 $btnStart.Font = New-Object Drawing.Font("Meiryo UI", 10, [Drawing.FontStyle]::Bold)
@@ -361,11 +165,6 @@ $form.Controls.Add($btnStart)
 $form.Controls.Add($btnStop)
 $form.Controls.Add($btnExit)
 
-$form.add_FormClosing({
-    param($sender, $e)
-    $e.Cancel = $true  # ← いったん終了キャンセル！
-})
-
 # --- Write-Log 関数 ---
 function Write-Log($msg) {
     try {
@@ -379,10 +178,6 @@ function Start-Game {
         $game = $gameBox.SelectedItem
         switch -Wildcard ($game) {
             "*Hero Wars*" {
-                $edgePaths = @(
-                    "D:\\Microsoft\\Edge\\Application\\msedge.exe",
-                    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-                )
                 $edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
                 if ($edge) {
                     Start-Process $edge -ArgumentList "https://www.hero-wars.com/"
@@ -405,23 +200,71 @@ function Start-Game {
     } catch { Write-Log "ゲーム起動エラー: $_" }
 }
 
-# --- OBS配信開始自動クリック＋非表示 ---
-function Start-OBS-With-Minimize {
-    # OBS起動（Steam経由）→30秒待機→最小化
-    $obsProcess = Start-Process "steam://run/1905180" -PassThru
-    Start-Sleep -Seconds 30
-    $hOBS = [Win32]::FindWindow("Qt5QWindowIcon", $null)
-    if ($hOBS -ne [IntPtr]::Zero) {
-        [Win32]::ShowWindow($hOBS, $SW_MINIMIZE)
-        Write-Host "OBSウィンドウ最小化完了！（30秒後）"
-    } else {
-        Write-Host "OBSウィンドウ見つからんやったばい！"
-    }
-}
+# --- 終了メニュー（サブフォーム） ---
+function Show-AfterExitMenu {
+    $menuForm = New-Object System.Windows.Forms.Form
+    $menuForm.Text = "　Windows 終了しますか？　"
+    $menuForm.FormBorderStyle = 'FixedDialog'
+    $menuForm.MaximizeBox = $false
+    $menuForm.MinimizeBox = $false
+    $menuForm.StartPosition = 'CenterScreen'
+    $menuForm.Size = New-Object Drawing.Size(320,200)
+    $menuForm.TopMost = $true
+    $menuForm.BackColor = [System.Drawing.Color]::FromArgb(240,250,255)
 
-$btnStartOBS.Add_Click({
-    Start-OBS-With-Minimize
-})
+    # 再起動ボタン
+    $btnRestart = New-Object System.Windows.Forms.Button
+    $btnRestart.Text = "再起動"
+    $btnRestart.Location = New-Object Drawing.Point(30,30)
+    $btnRestart.Size = New-Object Drawing.Size(110,36)
+    $btnRestart.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
+    $btnRestart.Add_Click({ 
+        [System.Windows.Forms.MessageBox]::Show("龍神様が再起動ぶっ飛ばすばい！") 
+        Restart-Computer
+    })
+    $menuForm.Controls.Add($btnRestart)
+
+    # サスペンドボタン
+    $btnSuspend = New-Object System.Windows.Forms.Button
+    $btnSuspend.Text = "サスペンド"
+    $btnSuspend.Location = New-Object Drawing.Point(160,30)
+    $btnSuspend.Size = New-Object Drawing.Size(110,36)
+    $btnSuspend.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
+    $btnSuspend.Add_Click({
+        [System.Windows.Forms.MessageBox]::Show("龍神様で眠らせるばい…zzz")
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PowerState { [DllImport("Powrprof.dll", SetLastError=true)] public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent); }' -ErrorAction SilentlyContinue
+        [void][PowerState]::SetSuspendState($false, $true, $true)
+    })
+    $menuForm.Controls.Add($btnSuspend)
+
+    # シャットダウンボタン
+    $btnShutdown = New-Object System.Windows.Forms.Button
+    $btnShutdown.Text = "シャットダウン"
+    $btnShutdown.Location = New-Object Drawing.Point(30,90)
+    $btnShutdown.Size = New-Object Drawing.Size(110,36)
+    $btnShutdown.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
+    $btnShutdown.Add_Click({
+        [System.Windows.Forms.MessageBox]::Show("龍神様がシャットダウンごり押しするばい！")
+        Stop-Computer
+    })
+    $menuForm.Controls.Add($btnShutdown)
+
+    # "終わらない"ボタン（Edgeでx.com開いてF11全画面）
+    $btnEdge = New-Object System.Windows.Forms.Button
+    $btnEdge.Text = "終わらない"
+    $btnEdge.Location = New-Object Drawing.Point(160,90)
+    $btnEdge.Size = New-Object Drawing.Size(110,36)
+    $btnEdge.Font = New-Object Drawing.Font("Meiryo UI", 12, [Drawing.FontStyle]::Bold)
+    $btnEdge.Add_Click({
+        Start-Process "msedge.exe" "https://x.com"
+        Start-Sleep -Seconds 3
+        $wshell = New-Object -ComObject wscript.shell
+        $wshell.SendKeys('{F11}')
+    })
+    $menuForm.Controls.Add($btnEdge)
+
+    $menuForm.ShowDialog()
+}
 
 # --- ボタンイベント登録 ---
 $btnStart.Add_Click({
@@ -446,7 +289,6 @@ public class Win32 {
         $statusLabel.Text = "【配信中！】"
         $statusLabel.ForeColor = [System.Drawing.Color]::FromArgb(200, 40, 40)
         Write-Log "配信開始！"
-        Click-OBS-StartStreaming
         Start-Game
         Write-Log "配信タイマー: $($timeBox.SelectedItem)"
     } catch { Write-Log "配信開始エラー: $_" }
@@ -484,7 +326,7 @@ $btnStop.Add_Click({
             "Final Fantasy Ⅶ - EVER CRISIS" = "ff7_ec"
             "Flash Party" = "FlashParty"
             "War Robots" = "WarRobots"
-            "Hero Wars" = "msedge" # ブラウザで開く場合
+            "Hero Wars" = "msedge"
             "RAID: Shadow Legends" = "Raid"
         }
         if ($gameProcMap.ContainsKey($game)) {
@@ -500,7 +342,6 @@ $btnStop.Add_Click({
         }
 
         Write-Log "全部終わったばい！"
-        # 必要ならフォームも閉じる
         $form.Close()
     } catch { Write-Log "全終了エラー: $_" }
 })
@@ -514,8 +355,8 @@ $btnExit.Add_Click({
     } catch { [System.Windows.Forms.MessageBox]::Show("終了エラー: $_") }
 })
 
-$mainForm.Add_FormClosing({
-    $_.Cancel = $true  # 閉じるのを止める
+$form.Add_FormClosing({
+    $_.Cancel = $true
     Show-AfterExitMenu
 })
 
@@ -546,36 +387,6 @@ $form.Add_Shown({
     } catch {
         Write-Log "Steam非表示エラー: $_"
     }
-    # OBS配信開始を押したら最小化（無限ループJob）
-    Start-Job -ScriptBlock {
-        param($SW_MINIMIZE)
-        Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class Win32 {
-    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-"@ -ErrorAction SilentlyContinue
-        $obsProcessName = "obs64"
-        $obsTitleMatch = "【配信中】"
-        while ($true) {
-            $obsProc = Get-Process -Name $obsProcessName -ErrorAction SilentlyContinue
-            if ($obsProc) {
-                foreach ($proc in $obsProc) {
-                    $obsHwnd = [Win32]::FindWindow($null, $proc.MainWindowTitle)
-                    if ($obsHwnd -ne 0) {
-                        if ($proc.MainWindowTitle -match $obsTitleMatch) {
-                            [Win32]::ShowWindow($obsHwnd, $SW_MINIMIZE)
-                            break 2
-                        }
-                    }
-                }
-            }
-            Start-Sleep -Seconds 2
-        }
-    } -ArgumentList $SW_MINIMIZE | Out-Null
 })
 
 [void]$form.ShowDialog()
-
